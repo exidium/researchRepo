@@ -199,3 +199,11 @@
   outline: 2px solid color-mix(in oklab, var(--hl) 80%, var(--foreground));
   outline-offset: 1px;
 }
+.transcript-editor .find-match {
+  background: color-mix(in oklab, #f59e0b 35%, transparent);
+  border-radius: 2px;
+}
+.transcript-editor .find-current {
+  background: color-mix(in oklab, #f59e0b 70%, transparent);
+  outline: 1px solid #d97706;
+}

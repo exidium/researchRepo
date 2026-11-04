@@ -6,6 +6,8 @@ Researched 2026-10-15 from heymarvin.com (product, pricing, integrations pages),
 
 - **2026-10-15, milestone 10:** the highlight explorer (`/explore`) and Themes shipped. Themes are the spec's v2 insights expressed as a browsable tree (decisions D43, D45–D47). In section 8 below, "Insight report editor", "Draft states" and "Custom report templates" are now **Partial**: a theme has a finding, description, confidence, product area, nesting and ordered highlights, but no rich-text body, templates, publishing states, comments or exports. Section 6 "Keyword search" gains browsing by project, tag, person and theme with counts, which Marvin frames as Ask AI rather than navigation.
 
+- **2026-11-04, milestones 12 and 13:** automatic transcription with speaker labels shipped on the server (sections 1 and 2: "Automatic transcription" and "Speakers" are now **Built**, within the spec change in D41). Find and replace in transcripts, notes on highlights, and tag counts per project and across projects are **Built** (sections 2, 3 and 4).
+
 ## How to read the status column
 
 | Status | Meaning |

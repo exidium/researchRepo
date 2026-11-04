@@ -110,3 +110,10 @@ What each milestone delivered and how it was verified. Decisions live in `decisi
 - Speaker assignment reworked to one speaker per sentence with artefact-speaker folding (D57); 11 worker unit tests.
 - Deployed to the Helsinki server 2026-11-04 (Bruno approved). The first release hit two build problems, fixed: the slim Python image has no `bzip2` (model now unpacked with Python's `tarfile`), and a Docker build-cache snapshot error (cleared with `docker builder prune`). The release script stops before migrating or restarting when a build fails, so the live site was never half-updated.
 - Benchmark on the server's 3 worker cores, 295 s synthetic recording: medium 26 min, large-v3 39 min, diarization 7 min per hour of audio. A 60-minute interview with medium takes about 33 minutes end to end.
+
+## M13 · Editor tools: find and replace, notes, tag counts (2026-11-04)
+
+- `src/lib/transcript/find.ts` (pure, 6 unit tests) and a ProseMirror plugin in `editor-extensions.ts` that keeps matches current as the text changes and paints them; `FindBar.tsx` with previous/next, match case, whole word, replace and replace all.
+- Inline note editor on each highlight in `HighlightPanel.tsx`, using the existing `setHighlightNote` action.
+- `tagProjectCounts` and `tagMatrix` in `src/server/queries/tags.ts`; "Tags in this project" on the project page; "By project" tab on `/tags` with a shaded tags × projects table.
+- Verified: 50 unit tests, 15 Playwright tests including `tests/e2e/editor-tools.spec.ts` (reversible replace-all with anchor checks, note persistence, count links landing on matching search results).

@@ -1,4 +1,7 @@
-import { Plugin } from "@tiptap/pm/state";
+import { Plugin, PluginKey } from "@tiptap/pm/state";
+import { Extension } from "@tiptap/core";
+import { Decoration, DecorationSet } from "@tiptap/pm/view";
+import { findMatches, type FindOptions, type Match } from "@/lib/transcript/find";
 import type { Editor } from "@tiptap/core";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import { SegmentNode } from "@/lib/transcript/schema";
@@ -95,6 +98,43 @@ export const SegmentView = SegmentNode.extend<SegmentViewOptions>({
           const after = segmentIdsOf(tr.doc);
           for (let i = 0; i < before.length; i++) if (before[i] !== after[i]) return false;
           return true;
+        },
+      }),
+    ];
+  },
+});
+
+// ---------- find and replace ----------
+
+
+export type FindState = { query: string; opts: FindOptions; matches: Match[]; current: number };
+export const findKey = new PluginKey<FindState>("find");
+
+/** Keeps the current search's matches up to date as the document changes, and paints them. */
+export const FindHighlight = Extension.create({
+  name: "findHighlight",
+  addProseMirrorPlugins() {
+    return [
+      new Plugin<FindState>({
+        key: findKey,
+        state: {
+          init: () => ({ query: "", opts: {}, matches: [], current: 0 }),
+          apply(tr, prev, _old, state) {
+            const meta = tr.getMeta(findKey) as Partial<FindState> | undefined;
+            if (!meta && !tr.docChanged) return prev;
+            const query = meta?.query ?? prev.query;
+            const opts = meta?.opts ?? prev.opts;
+            const matches = findMatches(state.doc, query, opts);
+            const current = meta?.current ?? Math.min(prev.current, Math.max(0, matches.length - 1));
+            return { query, opts, matches, current };
+          },
+        },
+        props: {
+          decorations(state) {
+            const s = findKey.getState(state);
+            if (!s?.matches.length) return null;
+            return DecorationSet.create(state.doc, s.matches.map((m, i) => Decoration.inline(m.from, m.to, { class: i === s.current ? "find-match find-current" : "find-match" })));
+          },
         },
       }),
     ];

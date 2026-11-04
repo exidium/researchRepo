@@ -14,6 +14,9 @@ import { requirePageUser } from "@/lib/auth";
 import { roleAtLeast } from "@/lib/authz";
 import { formatDate, plural } from "@/lib/format";
 import { getProjectForUser, listProductAreas } from "@/server/queries/projects";
+import { tagProjectCounts, listTagsForPicker } from "@/server/queries/tags";
+import { searchHref } from "@/lib/search-params";
+import { tagColor } from "@/lib/colors";
 
 export default async function ProjectPage({ params }: PageProps<"/projects/[projectId]">) {
   const { projectId } = await params;
@@ -21,6 +24,9 @@ export default async function ProjectPage({ params }: PageProps<"/projects/[proj
   const [data, productAreas] = await Promise.all([getProjectForUser(user, projectId), listProductAreas()]);
   if (!data) notFound();
   const { project, role, participants, highlightCount } = data;
+  const [tagCounts, allTags] = await Promise.all([tagProjectCounts(user, project.id), listTagsForPicker()]);
+  const tagById = new Map(allTags.map((t) => [t.id, t]));
+  const projectTags = tagCounts.map((c) => ({ tag: tagById.get(c.tagId), count: c.count })).filter((x) => x.tag).sort((a, b) => b.count - a.count);
   const canEdit = roleAtLeast(role, "EDITOR");
   const canAdmin = roleAtLeast(role, "ADMIN");
   const newSource = <SourceDialog projectId={project.id} trigger={<Button size="sm"><Plus className="size-4" /> New source</Button>} />;
@@ -88,6 +94,26 @@ export default async function ProjectPage({ params }: PageProps<"/projects/[proj
           </div>
         </section>
         <aside className="flex flex-col gap-6">
+          <div>
+            <div className="mb-2 flex items-baseline justify-between">
+              <h2 className="text-sm font-medium">Tags in this project</h2>
+              {projectTags.length ? <Link href="/tags?view=projects" className="text-xs text-muted-foreground hover:underline">All projects</Link> : null}
+            </div>
+            {projectTags.length ? (
+              <ul className="flex flex-col gap-1 text-sm">
+                {projectTags.slice(0, 15).map(({ tag, count }) => (
+                  <li key={tag!.id}>
+                    <Link href={searchHref({ tagIds: [tag!.id], projectIds: [project.id] })} className="flex items-center gap-2 rounded px-1 py-0.5 hover:bg-muted/60">
+                      <span className="size-2.5 shrink-0 rounded-full" style={{ background: tagColor(tag!) }} />
+                      <span className="flex-1 truncate">{tag!.name}</span>
+                      <span className="tabular-nums text-xs text-muted-foreground">{count}</span>
+                    </Link>
+                  </li>
+                ))}
+                {projectTags.length > 15 ? <li className="px-1 text-xs text-muted-foreground">+{projectTags.length - 15} more</li> : null}
+              </ul>
+            ) : <p className="text-sm text-muted-foreground">No tagged highlights yet.</p>}
+          </div>
           <div>
             <h2 className="mb-2 text-sm font-medium">Participants</h2>
             {participants.length ? (

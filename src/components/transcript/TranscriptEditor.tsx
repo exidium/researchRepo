@@ -11,8 +11,11 @@ import { HighlightMark, TranscriptDoc } from "@/lib/transcript/schema";
 import { anchorsFromSelection, buildTranscriptDoc, findSegment, markRangesOfSegment, trimSelection, type DocSegment } from "@/lib/transcript/doc";
 import { highlightColor, type TagLike } from "@/lib/colors";
 import { usePlayer } from "@/stores/player";
-import { createHighlight, deleteHighlight, renameSpeaker, saveSegment, setHighlightTags } from "@/server/actions/highlights";
-import { SegmentView } from "./editor-extensions";
+import { createHighlight, deleteHighlight, renameSpeaker, saveSegment, setHighlightNote, setHighlightTags } from "@/server/actions/highlights";
+import { FindHighlight, SegmentView } from "./editor-extensions";
+import { FindBar } from "./FindBar";
+import { Search } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { HighlightPanel } from "./HighlightPanel";
 import { SelectionToolbar } from "./SelectionToolbar";
 import { SpeakerPopover, type SpeakerTarget } from "./SpeakerPopover";
@@ -37,6 +40,7 @@ export function TranscriptEditor({ sourceId, segments, highlights: initial, tags
   const [highlights, setHighlights] = useState<ClientHighlight[]>(() => initial.map(toClient));
   const [tags, setTags] = useState<TagLike[]>(initialTags);
   const [selectedId, setSelectedId] = useState<string | null>(search.get("highlight"));
+  const [findOpen, setFindOpen] = useState(false);
   const [toolbar, setToolbar] = useState<{ top: number; left: number } | null>(null);
   const [speakerTarget, setSpeakerTarget] = useState<SpeakerTarget | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -121,6 +125,7 @@ export function TranscriptEditor({ sourceId, segments, highlights: initial, tags
       Text,
       HighlightMark,
       UndoRedo,
+      FindHighlight,
     ],
     content,
     editable: canEdit,
@@ -221,6 +226,13 @@ export function TranscriptEditor({ sourceId, segments, highlights: initial, tags
     if (tr.steps.length) editor.view.dispatch(tr.setMeta(SKIP, true));
   };
 
+  const setNoteFor = async (id: string, note: string | null) => {
+    const res = await setHighlightNote({ highlightId: id, note });
+    if (!res.ok) { toast.error(res.error); return false; }
+    mergeHighlights([res.data]);
+    return true;
+  };
+
   const setTagsFor = async (id: string, tagIds: string[]) => {
     const res = await setHighlightTags({ highlightId: id, tagIds });
     if (!res.ok) { toast.error(res.error); return; }
@@ -256,9 +268,23 @@ export function TranscriptEditor({ sourceId, segments, highlights: initial, tags
     toast.success(input.scope === "all" ? `Renamed ${ids.size} lines` : "Speaker updated");
   };
 
+  // Cmd/Ctrl+F opens the transcript's own find bar instead of the browser's.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") { e.preventDefault(); setFindOpen(true); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
       <div ref={containerRef} className="transcript-editor relative min-w-0" data-editable={canEdit} data-has-recording={hasRecording} onMouseDown={() => speakerTarget && setSpeakerTarget(null)}>
+        {findOpen && editor ? <FindBar editor={editor} canEdit={canEdit} onClose={() => { setFindOpen(false); editor.commands.focus(); }} /> : (
+          <div className="mb-2 flex justify-end">
+            <Button type="button" size="xs" variant="ghost" className="text-muted-foreground" onClick={() => setFindOpen(true)}><Search className="size-3.5" /> {canEdit ? "Find and replace" : "Find"} <kbd className="ml-1 rounded border px-1 text-[10px]">⌘F</kbd></Button>
+          </div>
+        )}
         <EditorContent editor={editor} />
         {toolbar && editor ? <SelectionToolbar position={toolbar} allTags={tags} onHighlight={addHighlight} onTagCreated={(t) => setTags((p) => [...p, t])} /> : null}
         {speakerTarget ? <SpeakerPopover target={speakerTarget} participants={participants} onSave={saveSpeaker} onClose={() => setSpeakerTarget(null)} /> : null}
@@ -273,6 +299,7 @@ export function TranscriptEditor({ sourceId, segments, highlights: initial, tags
           allTags={tags}
           onSetTags={setTagsFor}
           onDelete={removeHighlight}
+          onSetNote={setNoteFor}
           onTagCreated={(t) => setTags((p) => [...p, t])}
         />
       </aside>
