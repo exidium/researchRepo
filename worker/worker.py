@@ -6,8 +6,13 @@ faster-whisper, coalesce Whisper's short segments into utterances (same rule as 
 decision D18), and replace the source's segments in one transaction. Refuses to overwrite a source that
 has highlights (decision D20). Progress is written as audio position / duration.
 
+Speakers: sherpa-onnx diarization (pyannote segmentation + TitaNet embeddings, ONNX, no PyTorch, no account).
+Whisper runs with word timestamps; each word takes the speaker whose turn covers it and lines split where the
+speaker changes. If diarization fails, the transcript is still written without speaker names.
+
 Env: DATABASE_URL, UPLOAD_DIR, WHISPER_MODEL (default "medium"), WHISPER_THREADS (default: all cores),
-WHISPER_BEAM (default 5), POLL_SECONDS (default 5), HF_TOKEN + DIARIZE=1 for optional pyannote diarization.
+WHISPER_BEAM (default 5), POLL_SECONDS (default 5), DIARIZE (default "1"), DIARIZATION_MODELS (folder with
+segmentation.onnx and embedding.onnx), DIARIZE_THRESHOLD (clustering distance, default 0.5).
 """
 import os
 import re
@@ -26,7 +31,9 @@ MODEL_NAME = os.environ.get("WHISPER_MODEL", "medium")
 THREADS = int(os.environ.get("WHISPER_THREADS", str(os.cpu_count() or 4)))
 BEAM = int(os.environ.get("WHISPER_BEAM", "5"))
 POLL = float(os.environ.get("POLL_SECONDS", "5"))
-DIARIZE = os.environ.get("DIARIZE") == "1" and bool(os.environ.get("HF_TOKEN"))
+DIARIZE = os.environ.get("DIARIZE", "1") == "1"
+DIAR_DIR = os.environ.get("DIARIZATION_MODELS", "/opt/diarization")
+DIAR_THRESHOLD = float(os.environ.get("DIARIZE_THRESHOLD", "0.5"))
 
 running = True
 
@@ -70,32 +77,120 @@ def coalesce(segs, max_gap_ms=2000, target=200, hard_max=700):
     return out
 
 
+_diarizer = None
+_extractor = None
+REFINE_MIN_S = 1.0      # lines shorter than this keep the first-pass speaker
+REFINE_MARGIN = 0.05    # cosine-similarity margin needed to move a line to another speaker
+
+
+def _models():
+    global _diarizer, _extractor
+    import sherpa_onnx as so
+    if _diarizer is None:
+        emb_cfg = so.SpeakerEmbeddingExtractorConfig(model=os.path.join(DIAR_DIR, "embedding.onnx"), num_threads=THREADS)
+        cfg = so.OfflineSpeakerDiarizationConfig(
+            segmentation=so.OfflineSpeakerSegmentationModelConfig(
+                pyannote=so.OfflineSpeakerSegmentationPyannoteModelConfig(model=os.path.join(DIAR_DIR, "segmentation.onnx")), num_threads=THREADS),
+            embedding=emb_cfg,
+            clustering=so.FastClusteringConfig(num_clusters=-1, threshold=DIAR_THRESHOLD),
+            min_duration_on=0.3, min_duration_off=0.5)
+        if not cfg.validate():
+            raise RuntimeError(f"diarization models missing or invalid in {DIAR_DIR}")
+        _diarizer = so.OfflineSpeakerDiarization(cfg)
+        _extractor = so.SpeakerEmbeddingExtractor(emb_cfg)
+    return _diarizer, _extractor
+
+
 def diarize(path):
-    """Returns [(start_ms, end_ms, label)] or [] when diarization is off or fails."""
+    """
+    Pass 1: sherpa-onnx diarization → turns [(start_ms, end_ms, "Speaker N")], numbered by first appearance.
+    Returns (turns, refine) where refine(cues) is pass 2: each cue of at least REFINE_MIN_S gets a voiceprint
+    and moves to the nearest speaker's voiceprint if that is clearly closer. Pass 2 fixes turns the segmenter
+    merged across short pauses. Returns ([], identity) when diarization is off or fails.
+    """
+    identity = lambda cues: cues
     if not DIARIZE:
-        return []
+        return [], identity
     try:
-        from pyannote.audio import Pipeline  # type: ignore
-        pipe = Pipeline.from_pretrained("pyannote/speaker-diarization-3.1", use_auth_token=os.environ["HF_TOKEN"])
-        turns = pipe(path)
-        names = {}
-        result = []
-        for turn, _, spk in turns.itertracks(yield_label=True):
-            names.setdefault(spk, f"Speaker {len(names) + 1}")
-            result.append((int(turn.start * 1000), int(turn.end * 1000), names[spk]))
-        return result
-    except Exception as e:  # diarization is a bonus, never a reason to fail the transcript
-        log("diarization failed:", e)
-        return []
+        import numpy as np
+        from faster_whisper.audio import decode_audio
+        sd, ext = _models()
+        sr = sd.sample_rate
+        audio = decode_audio(path, sampling_rate=sr)
+
+        def voiceprint(a_ms, b_ms):
+            st = ext.create_stream()
+            st.accept_waveform(sr, audio[int(a_ms * sr / 1000):int(b_ms * sr / 1000)])
+            st.input_finished()
+            v = np.array(ext.compute(st))
+            return v / (np.linalg.norm(v) + 1e-9)
+
+        names, turns = {}, []
+        for r in sd.process(audio).sort_by_start_time():
+            names.setdefault(r.speaker, f"Speaker {len(names) + 1}")
+            turns.append((int(r.start * 1000), int(r.end * 1000), names[r.speaker]))
+
+        centroids = {}
+        for a, b, label in turns:
+            if b - a >= REFINE_MIN_S * 1000:
+                centroids.setdefault(label, []).append(voiceprint(a, b) * (b - a))
+        centroids = {k: (lambda m: m / (np.linalg.norm(m) + 1e-9))(np.sum(v, axis=0)) for k, v in centroids.items()}
+
+        def refine(cues):
+            if len(centroids) < 2:
+                return cues
+            moved = 0
+            for c in cues:
+                if c["end"] - c["start"] < REFINE_MIN_S * 1000 or c["speaker"] not in centroids:
+                    continue
+                e = voiceprint(c["start"], c["end"])
+                sims = {k: float(e @ v) for k, v in centroids.items()}
+                best = max(sims, key=sims.get)
+                if best != c["speaker"] and sims[best] - sims[c["speaker"]] >= REFINE_MARGIN:
+                    c["speaker"] = best
+                    moved += 1
+            if moved:
+                log(f"speaker pass 2 moved {moved} line(s)")
+            return cues
+
+        return turns, refine
+    except Exception as e:  # speakers are a bonus, never a reason to lose the transcript
+        log("diarization failed, continuing without speakers:", e)
+        return [], identity
 
 
-def speaker_for(start, end, turns):
+def speaker_at(start, end, turns):
+    """Speaker with the most overlap; with no overlap (a word in a pause), the nearest turn."""
     best, overlap = None, 0
     for ts, te, label in turns:
         o = min(end, te) - max(start, ts)
         if o > overlap:
             best, overlap = label, o
+    if best is None and turns:
+        mid = (start + end) / 2
+        best = min(turns, key=lambda t: min(abs(mid - t[0]), abs(mid - t[1])))[2]
     return best
+
+
+def split_by_speaker(segments, turns):
+    """Whisper segments (with words) → cues that never cross a speaker change."""
+    cues = []
+    for seg in segments:
+        words = seg["words"] or [{"start": seg["start"], "end": seg["end"], "word": seg["text"]}]
+        cur = None
+        for w in words:
+            spk = speaker_at(w["start"], w["end"], turns) if turns else None
+            if cur is None or spk != cur["speaker"]:
+                if cur and cur["text"].strip():
+                    cues.append(cur)
+                cur = {"start": w["start"], "end": w["end"], "text": "", "speaker": spk}
+            cur["text"] += w["word"]
+            cur["end"] = w["end"]
+        if cur and cur["text"].strip():
+            cues.append(cur)
+    for c in cues:
+        c["text"] = re.sub(r"\s+", " ", c["text"]).strip()
+    return [c for c in cues if c["text"]]
 
 
 def claim(conn):
@@ -139,21 +234,28 @@ def process(conn, job):
         raise RuntimeError("recording file is missing on disk")
     t0 = time.time()
     model = model_for(model_name or MODEL_NAME)
-    segments, info = model.transcribe(path, language=language or None, beam_size=BEAM, vad_filter=True, condition_on_previous_text=False)
+    segments, info = model.transcribe(path, language=language or None, beam_size=BEAM, vad_filter=True,
+                                      condition_on_previous_text=False, word_timestamps=True)
     duration = max(info.duration, 0.001)
     log(f"job {job_id}: language={info.language} p={info.language_probability:.2f} audio={duration:.0f}s")
     raw, last_report = [], 0.0
     for seg in segments:
         text = seg.text.strip()
-        if text:
-            raw.append({"start": int(seg.start * 1000), "end": int(seg.end * 1000), "text": text, "speaker": None})
+        # Whisper's own hallucination rule: likely silence decoded as text.
+        if text and not (seg.no_speech_prob > 0.6 and seg.avg_logprob < -1.0):
+            raw.append({"start": int(seg.start * 1000), "end": int(seg.end * 1000), "text": text,
+                        "words": [{"start": int(w.start * 1000), "end": int(w.end * 1000), "word": w.word} for w in (seg.words or [])]})
         if time.time() - last_report > 5:
             last_report = time.time()
             with conn.transaction():
                 conn.execute("""UPDATE "TranscriptionJob" SET progress = %s WHERE id = %s""", (min(seg.end / duration, 0.99), job_id))
-    turns = diarize(path)
-    for s in raw:
-        s["speaker"] = speaker_for(s["start"], s["end"], turns) if turns else None
+    with conn.transaction():
+        conn.execute("""UPDATE "TranscriptionJob" SET progress = 0.99 WHERE id = %s""", (job_id,))
+    t_d = time.time()
+    turns, refine = diarize(path)
+    raw = refine(split_by_speaker(raw, turns))
+    if turns:
+        log(f"job {job_id}: {len({c['speaker'] for c in raw if c['speaker']})} speakers in {time.time() - t_d:.0f}s")
     # With speaker labels, merge same-speaker cues into utterances (D18). Without them every cue has the same
     # (empty) speaker, so only join fragments that do not end a sentence: questions and answers stay separate
     # lines that can each be given a speaker in the editor.

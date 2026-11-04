@@ -38,12 +38,10 @@ services:
       - "127.0.0.1:3000:3000"  # Caddy on the host terminates HTTPS and proxies here
 
   # Transcription worker: claims jobs from Postgres, transcribes recordings on CPU (faster-whisper).
-  # Diarization (speaker labels) is optional: build with DIARIZATION=1 and set HF_TOKEN (decision D55).
+  # Speakers are labelled with sherpa-onnx; its models are baked into the image (decision D56).
   worker:
     build:
       context: ./worker
-      args:
-        DIARIZATION: ${DIARIZATION:-0}
     restart: unless-stopped
     depends_on:
       db:
@@ -53,8 +51,8 @@ services:
       UPLOAD_DIR: /data/uploads
       WHISPER_MODEL: ${WHISPER_MODEL:-medium}
       WHISPER_THREADS: ${WHISPER_THREADS:-3}
-      DIARIZE: ${DIARIZE:-0}
-      HF_TOKEN: ${HF_TOKEN:-}
+      DIARIZE: ${DIARIZE:-1}
+      DIARIZE_THRESHOLD: ${DIARIZE_THRESHOLD:-0.5}
     volumes:
       - uploads:/data/uploads:ro
       - whisper-models:/models
