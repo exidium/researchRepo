@@ -20,15 +20,23 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod run --rm migrate
 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
 ```
 
+## Without a domain
+
+`sslip.io` maps `<ip-with-dashes>.sslip.io` to that IP, so Caddy can obtain a certificate before a real domain exists. The first server uses `2-29-131-182.sslip.io`; replace it with the real hostname in `/etc/caddy/Caddyfile` when the domain is ready.
+
 ## First admin user
 
 Until SSO exists, users are created by an admin. The very first one is created from the shell:
 
 ```bash
-docker compose -f docker-compose.prod.yml --env-file .env.prod run --rm migrate pnpm tsx scripts/create-user.ts admin@company.com "Full Name" --admin
+docker compose -f docker-compose.prod.yml --env-file .env.prod run -T --rm -e USER_PASSWORD='...' migrate pnpm tsx scripts/create-user.ts admin@company.com "Full Name" --admin </dev/null
 ```
 
-The script prompts for a password. Further users are created from the Users page in the app.
+Pass `-T` and `</dev/null` to every `compose run` inside a script: without them the container attaches to stdin and swallows the rest of the script. Further users are created from the Users page in the app. The seed creates the three `*@local` dev users without a password unless `DEV_PASSWORD` is set; never set it on a server.
+
+## First deployment (2026-11-04)
+
+Hetzner CPX32, Helsinki, Ubuntu 26.04, Docker and Caddy from Ubuntu's repositories, `ufw` allowing 22/80/443, `fail2ban`, backup cron at 02:30 to `/srv/research/backups` (local only until an off-site target exists). Repository at `/srv/research`, env in `/srv/research/.env.prod`. Release: `git pull`, `build`, `run -T --rm migrate </dev/null`, `up -d`.
 
 ## Backups
 

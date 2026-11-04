@@ -17,11 +17,13 @@ async function main() {
   await db.$executeRawUnsafe(`TRUNCATE "HighlightTag", "ThemeHighlight", "Theme", "Highlight", "Segment", "SourceParticipant", "Source", "ProjectMember", "Project", "Participant", "Tag", "TagGroup", "SavedView" CASCADE`);
 
   const users: Record<string, { id: string }> = {};
-  const passwordHash = await hash(process.env.DEV_PASSWORD ?? "password12", { memoryCost: 19456, timeCost: 2, parallelism: 1 });
+  // Dev users can sign in only when DEV_PASSWORD is set (local .env). On a server the seed leaves them without a password.
+  const devPassword = process.env.DEV_PASSWORD;
+  const passwordHash = devPassword ? await hash(devPassword, { memoryCost: 19456, timeCost: 2, parallelism: 1 }) : null;
   for (const u of DEV_USERS) {
     users[u.email] = await db.user.upsert({ where: { email: u.email }, update: { name: u.name, isAdmin: u.isAdmin, passwordHash }, create: { ...u, passwordHash } });
   }
-  console.log(`seeded ${DEV_USERS.length} dev users (password: ${process.env.DEV_PASSWORD ?? "password12"})`);
+  console.log(`seeded ${DEV_USERS.length} dev users (${devPassword ? "password from DEV_PASSWORD" : "no password: DEV_PASSWORD not set"})`);
 
   const mirrorDir = process.env.MIRROR_DIR ?? "fixtures/mirror";
   const stats = await importMirror(db, mirrorDir, { ownerId: users["admin@local"].id, log: (s) => console.log("  " + s) });
