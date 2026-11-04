@@ -139,11 +139,13 @@ model Source {
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
-  project           Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project           Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
   participants      SourceParticipant[]
   segments          Segment[]
   highlights        Highlight[]
   transcriptionJobs TranscriptionJob[]
+  suggestionJobs    SuggestionJob[]
+  suggestions       HighlightSuggestion[]
 
   @@index([projectId, date])
 }
@@ -177,8 +179,9 @@ model Segment {
   source      Source       @relation(fields: [sourceId], references: [id], onDelete: Cascade)
   participant Participant? @relation(fields: [participantId], references: [id], onDelete: SetNull)
 
-  startsHighlights Highlight[] @relation("HighlightStart")
-  endsHighlights   Highlight[] @relation("HighlightEnd")
+  startsHighlights Highlight[]           @relation("HighlightStart")
+  endsHighlights   Highlight[]           @relation("HighlightEnd")
+  suggestions      HighlightSuggestion[]
 
   @@unique([sourceId, order])
   @@index([sourceId, startMs])
@@ -203,6 +206,7 @@ model Highlight {
   text           String
   status         HighlightStatus          @default(ACTIVE)
   note           String?
+  aiAssisted     Boolean                  @default(false) // accepted from an AI suggestion; createdBy is the reviewer
   createdById    String?
   externalId     String?                  @unique // Dovetail highlight id
   createdAt      DateTime                 @default(now())
@@ -215,8 +219,9 @@ model Highlight {
   endSegment   Segment @relation("HighlightEnd", fields: [endSegmentId], references: [id], onDelete: Restrict)
   createdBy    User?   @relation("HighlightCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
 
-  tags   HighlightTag[]
-  themes ThemeHighlight[]
+  tags           HighlightTag[]
+  themes         ThemeHighlight[]
+  tagSuggestions TagSuggestion[]
 
   @@index([sourceId])
   @@index([startSegmentId])
@@ -243,8 +248,9 @@ model Tag {
   archivedAt  DateTime?
   externalIds String[]  @default([]) // Dovetail tag ids merged into this tag
 
-  group      TagGroup?      @relation(fields: [groupId], references: [id], onDelete: SetNull)
-  highlights HighlightTag[]
+  group       TagGroup?       @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  highlights  HighlightTag[]
+  suggestions TagSuggestion[]
 
   @@index([groupId])
   @@index([archivedAt])
@@ -347,4 +353,73 @@ model TranscriptionJob {
 
   @@index([status, createdAt])
   @@index([sourceId, createdAt])
+}
+
+// ---------- AI suggestions (decisions D44, D59) ----------
+// Suggestions live apart from Highlight so nothing unreviewed can reach search, counts, the explorer or exports.
+
+enum SuggestionStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+/// One "propose highlights for this transcript" run.
+model SuggestionJob {
+  id            String    @id @default(cuid())
+  sourceId      String
+  status        JobStatus @default(QUEUED)
+  model         String
+  error         String?
+  proposed      Int       @default(0)
+  requestedById String? // null when started automatically for a new transcript
+  createdAt     DateTime  @default(now())
+  startedAt     DateTime?
+  finishedAt    DateTime?
+
+  source      Source                @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  suggestions HighlightSuggestion[]
+
+  @@index([sourceId, createdAt])
+}
+
+/// A proposed highlight: one quote inside one segment, located again by its text whenever the segment changes.
+model HighlightSuggestion {
+  id           String           @id @default(cuid())
+  sourceId     String
+  jobId        String?
+  segmentId    String
+  startOffset  Int
+  endOffset    Int
+  quote        String
+  tagIds       String[]         @default([])
+  reason       String?
+  status       SuggestionStatus @default(PENDING)
+  highlightId  String? // the highlight it became, once accepted
+  reviewedById String?
+  reviewedAt   DateTime?
+  createdAt    DateTime         @default(now())
+
+  source  Source         @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  job     SuggestionJob? @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  segment Segment        @relation(fields: [segmentId], references: [id], onDelete: Cascade)
+
+  @@index([sourceId, status])
+  @@index([segmentId])
+}
+
+/// A tag the model proposes for an existing highlight. Rejections are kept so the same tag is not proposed again.
+model TagSuggestion {
+  highlightId  String
+  tagId        String
+  reason       String?
+  status       SuggestionStatus @default(PENDING)
+  reviewedById String?
+  createdAt    DateTime         @default(now())
+
+  highlight Highlight @relation(fields: [highlightId], references: [id], onDelete: Cascade)
+  tag       Tag       @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([highlightId, tagId])
+  @@index([tagId])
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { MessageSquarePlus, Trash2, X } from "lucide-react";
+import { Loader2, MessageSquarePlus, Plus, Sparkles, Trash2, X } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,10 +21,15 @@ type Props = {
   onDelete: (id: string) => void;
   onSetNote: (id: string, note: string | null) => Promise<boolean>;
   onTagCreated: (tag: TagLike) => void;
+  aiEnabled?: boolean;
+  onSuggestTags?: (id: string) => Promise<void>;
+  onAcceptTag?: (id: string, tagId: string) => void;
+  onRejectTag?: (id: string, tagId: string) => void;
 };
 
 /** Side list of highlights in transcript order; orphaned ones at the bottom. */
-export function HighlightPanel({ highlights, segmentOrder, selectedId, onSelect, canEdit, allTags, onSetTags, onDelete, onSetNote, onTagCreated }: Props) {
+export function HighlightPanel({ highlights, segmentOrder, selectedId, onSelect, canEdit, allTags, onSetTags, onDelete, onSetNote, onTagCreated, aiEnabled, onSuggestTags, onAcceptTag, onRejectTag }: Props) {
+  const [asking, setAsking] = useState<string | null>(null);
   const sorted = [...highlights].sort((a, b) => (segmentOrder.get(a.startSegmentId) ?? 0) - (segmentOrder.get(b.startSegmentId) ?? 0) || a.startOffset - b.startOffset);
   const active = sorted.filter((h) => h.status === "ACTIVE");
   const orphaned = sorted.filter((h) => h.status === "ORPHANED");
@@ -40,6 +45,7 @@ export function HighlightPanel({ highlights, segmentOrder, selectedId, onSelect,
         onClick={() => onSelect(h.id)}
       >
         <blockquote className="line-clamp-4 border-l-2 pl-2 text-[13px] leading-snug" style={{ borderColor: color }}>{h.text}</blockquote>
+        {h.aiAssisted ? <p className="mt-1 flex items-center gap-1 text-[11px] text-muted-foreground" title="Proposed by AI and accepted by the person who created it"><Sparkles className="size-3" /> AI-suggested, reviewed by {h.createdBy?.name ?? h.createdBy?.email ?? "a researcher"}</p> : null}
         <NoteField note={h.note} canEdit={canEdit} onSave={(n) => onSetNote(h.id, n)} />
         <div className="mt-1.5 flex flex-wrap items-center gap-1">
           {h.tags.map((t) => (
@@ -53,6 +59,22 @@ export function HighlightPanel({ highlights, segmentOrder, selectedId, onSelect,
               ) : null}
             </Badge>
           ))}
+          {canEdit ? h.suggestedTags.map((t) => (
+            <span key={`s-${t.id}`} className="flex items-center rounded-full border border-dashed border-violet-500/60 text-xs" title={t.reason ?? "Suggested by AI"}>
+              <button type="button" aria-label={`Add suggested tag ${t.name}`} className="flex items-center gap-1 rounded-l-full py-0.5 pr-1 pl-2 hover:bg-violet-500/10" onClick={(e) => { e.stopPropagation(); onAcceptTag?.(h.id, t.id); }}>
+                <Plus className="size-3" />{t.name}
+              </button>
+              <button type="button" aria-label={`Dismiss suggested tag ${t.name}`} className="rounded-r-full py-0.5 pr-1.5 pl-0.5 hover:bg-violet-500/10" onClick={(e) => { e.stopPropagation(); onRejectTag?.(h.id, t.id); }}>
+                <X className="size-3" />
+              </button>
+            </span>
+          )) : null}
+          {canEdit && aiEnabled && h.status === "ACTIVE" ? (
+            <Button type="button" variant="ghost" size="icon-xs" className="text-muted-foreground" aria-label="Suggest tags" title="Suggest tags with AI" disabled={asking === h.id}
+              onClick={async (e) => { e.stopPropagation(); setAsking(h.id); try { await onSuggestTags?.(h.id); } finally { setAsking(null); } }}>
+              {asking === h.id ? <Loader2 className="size-3.5 animate-spin" /> : <Sparkles className="size-3.5" />}
+            </Button>
+          ) : null}
           {canEdit ? (
             <span onClick={(e) => e.stopPropagation()}>
               <TagPicker

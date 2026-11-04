@@ -8,18 +8,20 @@ import { Text } from "@tiptap/extension-text";
 import type { Transaction } from "@tiptap/pm/state";
 import { toast } from "sonner";
 import { HighlightMark, TranscriptDoc } from "@/lib/transcript/schema";
-import { anchorsFromSelection, buildTranscriptDoc, findSegment, markRangesOfSegment, trimSelection, type DocSegment } from "@/lib/transcript/doc";
+import { anchorsFromSelection, buildTranscriptDoc, findSegment, markRangesOfSegment, positionsOfAnchors, trimSelection, type DocSegment } from "@/lib/transcript/doc";
 import { highlightColor, type TagLike } from "@/lib/colors";
 import { usePlayer } from "@/stores/player";
 import { createHighlight, deleteHighlight, renameSpeaker, saveSegment, setHighlightNote, setHighlightTags } from "@/server/actions/highlights";
-import { FindHighlight, SegmentView } from "./editor-extensions";
+import { FindHighlight, SegmentView, SuggestionMarks, suggestKey } from "./editor-extensions";
+import { acceptHighlightSuggestion, acceptTagSuggestion, rejectAllHighlightSuggestions, rejectHighlightSuggestion, rejectTagSuggestion, requestTagSuggestions } from "@/server/actions/suggestions";
+import { SuggestionList } from "./SuggestionList";
 import { FindBar } from "./FindBar";
 import { Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { HighlightPanel } from "./HighlightPanel";
 import { SelectionToolbar } from "./SelectionToolbar";
 import { SpeakerPopover, type SpeakerTarget } from "./SpeakerPopover";
-import { toClient, type ClientHighlight, type HighlightRow } from "./types";
+import { toClient, type ClientHighlight, type ClientSuggestion, type HighlightRow } from "./types";
 
 type Props = {
   sourceId: string;
@@ -29,18 +31,26 @@ type Props = {
   participants: { id: string; name: string }[];
   canEdit: boolean;
   hasRecording: boolean;
+  suggestions?: ClientSuggestion[];
+  aiEnabled?: boolean;
 };
 
 const SAVE_DELAY = 600;
 const SKIP = "skipSave";
 
-export function TranscriptEditor({ sourceId, segments, highlights: initial, tags: initialTags, participants, canEdit, hasRecording }: Props) {
+export function TranscriptEditor({ sourceId, segments, highlights: initial, tags: initialTags, participants, canEdit, hasRecording, suggestions: suggestionProps = [], aiEnabled = false }: Props) {
   const router = useRouter();
   const search = useSearchParams();
   const [highlights, setHighlights] = useState<ClientHighlight[]>(() => initial.map(toClient));
   const [tags, setTags] = useState<TagLike[]>(initialTags);
   const [selectedId, setSelectedId] = useState<string | null>(search.get("highlight"));
   const [findOpen, setFindOpen] = useState(false);
+  const [suggestions, setSuggestions] = useState<ClientSuggestion[]>(suggestionProps);
+  const [selectedSuggestion, setSelectedSuggestion] = useState<string | null>(null);
+  // A finished suggestion run arrives as new props after router.refresh(); adopt it when the set changes.
+  const suggestionKey = suggestionProps.map((x) => x.id).join(",");
+  const [seenKey, setSeenKey] = useState(suggestionKey);
+  if (suggestionKey !== seenKey) { setSeenKey(suggestionKey); setSuggestions(suggestionProps); }
   const [toolbar, setToolbar] = useState<{ top: number; left: number } | null>(null);
   const [speakerTarget, setSpeakerTarget] = useState<SpeakerTarget | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -126,6 +136,7 @@ export function TranscriptEditor({ sourceId, segments, highlights: initial, tags
       HighlightMark,
       UndoRedo,
       FindHighlight,
+      SuggestionMarks,
     ],
     content,
     editable: canEdit,
@@ -139,6 +150,8 @@ export function TranscriptEditor({ sourceId, segments, highlights: initial, tags
       handleClick: (view, pos) => {
         const marks = view.state.doc.resolve(pos).marks().filter((m) => m.type.name === "highlight");
         if (marks.length) { setSelectedId(marks[0].attrs.highlightId); return false; }
+        const hit = suggestKey.getState(view.state)?.ranges.find((r) => pos >= r.from && pos <= r.to);
+        if (hit) setSelectedSuggestion(hit.id);
         return false;
       },
       handlePaste: (view, event) => {
@@ -172,6 +185,17 @@ export function TranscriptEditor({ sourceId, segments, highlights: initial, tags
     marks[0]?.scrollIntoView({ block: "center", behavior: "smooth" });
     root.querySelector<HTMLElement>(`[data-highlight-item="${selectedId}"]`)?.scrollIntoView({ block: "nearest" });
   }, [selectedId, highlights, domReady]);
+
+  // ---- suggestions: keep the editor's dashed marks in step with the list ----
+  useEffect(() => {
+    if (!editor || !domReady) return;
+    editor.view.dispatch(editor.state.tr.setMeta(suggestKey, { items: suggestions, selected: selectedSuggestion }).setMeta(SKIP, true).setMeta("addToHistory", false));
+  }, [editor, domReady, suggestions, selectedSuggestion]);
+  useEffect(() => {
+    if (!selectedSuggestion || !domReady) return;
+    containerRef.current?.querySelector<HTMLElement>(`[data-suggestion-id="${selectedSuggestion}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+    containerRef.current?.querySelector<HTMLElement>(`[data-suggestion-item="${selectedSuggestion}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [selectedSuggestion, domReady]);
 
   // ---- ?segment= deep link from transcript search ----
   useEffect(() => {
@@ -209,6 +233,68 @@ export function TranscriptEditor({ sourceId, segments, highlights: initial, tags
     setHighlights((prev) => [...prev, h]);
     setSelectedId(h.id);
     setToolbar(null);
+    if (aiEnabled) void suggestTagsFor(h.id, true);
+  };
+
+  // ---- AI suggestions ----
+  const paintHighlight = (h: ClientHighlight) => {
+    if (!editor) return;
+    const range = positionsOfAnchors(editor.state.doc, h);
+    if (!range) return;
+    editor.view.dispatch(editor.state.tr.addMark(range.from, range.to, editor.schema.marks.highlight.create({ highlightId: h.id, color: colorOf(h) })).setMeta(SKIP, true));
+  };
+
+  const acceptSuggestion = async (id: string, tagIds: string[]) => {
+    const s = suggestions.find((x) => x.id === id);
+    if (!s || !editor) return;
+    // The server re-finds the quote in the saved text, so save a pending edit to that line first.
+    if (timers.current.has(s.segmentId)) { clearTimeout(timers.current.get(s.segmentId)); await flush(editor, s.segmentId); }
+    const res = await acceptHighlightSuggestion({ suggestionId: id, tagIds });
+    if (!res.ok) {
+      toast.error(res.error);
+      if (/no longer|already reviewed/i.test(res.error)) setSuggestions((p) => p.filter((x) => x.id !== id));
+      return;
+    }
+    const h = toClient(res.data.highlight);
+    paintHighlight(h);
+    setHighlights((prev) => [...prev, h]);
+    setSuggestions((p) => p.filter((x) => x.id !== id));
+    if (selectedSuggestion === id) setSelectedSuggestion(null);
+  };
+
+  const rejectSuggestion = async (id: string) => {
+    const res = await rejectHighlightSuggestion({ suggestionId: id });
+    if (!res.ok) { toast.error(res.error); return; }
+    setSuggestions((p) => p.filter((x) => x.id !== id));
+    if (selectedSuggestion === id) setSelectedSuggestion(null);
+  };
+
+  const rejectAll = async () => {
+    const res = await rejectAllHighlightSuggestions({ sourceId });
+    if (!res.ok) { toast.error(res.error); return; }
+    setSuggestions([]);
+    setSelectedSuggestion(null);
+    toast.success(`Dismissed ${res.data.count} suggestions`);
+  };
+
+  const suggestTagsFor = async (id: string, quiet = false) => {
+    const res = await requestTagSuggestions({ highlightId: id });
+    if (!res.ok) { if (!quiet) toast.error(res.error); return; }
+    mergeHighlights([res.data.highlight]);
+    if (!quiet && !res.data.added) toast.message("No further tags to suggest for this highlight");
+  };
+
+  const acceptTag = async (id: string, tagId: string) => {
+    const res = await acceptTagSuggestion({ highlightId: id, tagId });
+    if (!res.ok) { toast.error(res.error); return; }
+    mergeHighlights([res.data]);
+    recolor(id, colorOf(toClient(res.data)));
+  };
+
+  const rejectTag = async (id: string, tagId: string) => {
+    const res = await rejectTagSuggestion({ highlightId: id, tagId });
+    if (!res.ok) { toast.error(res.error); return; }
+    mergeHighlights([res.data]);
   };
 
   const recolor = (id: string, color: string | null) => {
@@ -289,7 +375,18 @@ export function TranscriptEditor({ sourceId, segments, highlights: initial, tags
         {toolbar && editor ? <SelectionToolbar position={toolbar} allTags={tags} onHighlight={addHighlight} onTagCreated={(t) => setTags((p) => [...p, t])} /> : null}
         {speakerTarget ? <SpeakerPopover target={speakerTarget} participants={participants} onSave={saveSpeaker} onClose={() => setSpeakerTarget(null)} /> : null}
       </div>
-      <aside className="lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:self-start lg:overflow-y-auto">
+      <aside className="flex flex-col gap-4 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:self-start lg:overflow-y-auto">
+        {canEdit ? (
+          <SuggestionList
+            suggestions={suggestions}
+            segmentOrder={segmentOrder}
+            selectedId={selectedSuggestion}
+            onSelect={setSelectedSuggestion}
+            onAccept={acceptSuggestion}
+            onReject={rejectSuggestion}
+            onRejectAll={rejectAll}
+          />
+        ) : null}
         <HighlightPanel
           highlights={highlights}
           segmentOrder={segmentOrder}
@@ -301,6 +398,10 @@ export function TranscriptEditor({ sourceId, segments, highlights: initial, tags
           onDelete={removeHighlight}
           onSetNote={setNoteFor}
           onTagCreated={(t) => setTags((p) => [...p, t])}
+          aiEnabled={aiEnabled}
+          onSuggestTags={(id) => suggestTagsFor(id)}
+          onAcceptTag={acceptTag}
+          onRejectTag={rejectTag}
         />
       </aside>
     </div>

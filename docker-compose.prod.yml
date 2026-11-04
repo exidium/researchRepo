@@ -32,6 +32,11 @@ services:
       MAX_TRANSCRIPT_BYTES: ${MAX_TRANSCRIPT_BYTES:-20000000}
       MAX_RECORDING_BYTES: ${MAX_RECORDING_BYTES:-2000000000}
       AUTH_DISABLED: "false"
+      # AI suggestions stay off until ANTHROPIC_API_KEY is set in .env.prod (decision D59).
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      AI_MODEL: ${AI_MODEL:-claude-opus-5-5}
+      AI_SUGGESTIONS: ${AI_SUGGESTIONS:-on}
+      AI_AUTO_SUGGEST: ${AI_AUTO_SUGGEST:-on}
     volumes:
       - uploads:/data/uploads   # mount a Hetzner volume here for large recordings
     ports:

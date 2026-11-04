@@ -3,6 +3,8 @@ import { PrismaClient } from "../src/generated/prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { importMirror } from "../src/server/import/dovetail";
 import { hash } from "@node-rs/argon2";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 const db = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
 
@@ -28,6 +30,16 @@ async function main() {
   const mirrorDir = process.env.MIRROR_DIR ?? "fixtures/mirror";
   const stats = await importMirror(db, mirrorDir, { ownerId: users["admin@local"].id, log: (s) => console.log("  " + s) });
   console.log("import:", JSON.stringify(stats));
+
+  // Synthetic tag descriptions (what each tag means). Only for the synthetic mirror; a real import keeps its own.
+  if (resolve(mirrorDir) === resolve("fixtures/mirror")) {
+    const descriptions: Record<string, string> = JSON.parse(readFileSync("fixtures/tag-descriptions.json", "utf8"));
+    let n = 0;
+    for (const [name, description] of Object.entries(descriptions)) {
+      n += (await db.tag.updateMany({ where: { name, description: null }, data: { description } })).count;
+    }
+    console.log(`described ${n} tags`);
+  }
 
   // Make one project restricted with the editor as EDITOR, so role rules are visible in dev.
   const restricted = await db.project.findFirst({ where: { name: { contains: "Block Diagramming" } } });

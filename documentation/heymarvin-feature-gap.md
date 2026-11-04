@@ -83,7 +83,7 @@ The repository in this folder was built to spec v0.1, which deliberately covers 
 | Merge overlapping labels | Merge from the Labels page (help: Tagging) | Merge keeps every highlight tagged once, moves Dovetail ids (D29) | Built | |
 | Archive | Advised in content; a dedicated archive feature was not confirmed | Archive and restore, hidden from pickers, still filterable | Built | We may exceed Marvin here |
 | File-level tags | Tags on whole files, separate from content labels (help: File tags) | None | Not built | Small: `SourceTag` table and picker on the source page |
-| AI auto-tagging | Every incoming source is tagged against the global taxonomy; "AI-powered Tagging" matches the existing taxonomy (marketing; Fall '25) | None | Spec: out of scope (AI) | The most-cited Marvin time saver ("68% reduction in analysis time") |
+| AI auto-tagging | Every incoming source is tagged against the global taxonomy; "AI-powered Tagging" matches the existing taxonomy (marketing; Fall '25) | Suggested highlights per transcript and suggested tags per highlight, from the global taxonomy with descriptions; every suggestion is reviewed before it is saved (M14, D59) | Built (2026-11-04) | Ours never tags without review, by design |
 | Tag graphs and AND filters | Graphs grouped by label or question; filters combine labels with AND (help: Tagging) | Search supports ANY/ALL tag filters; no charts | Partial | Tag frequency counts per project would be cheap |
 
 ### 5. Participants and research panel
@@ -229,7 +229,7 @@ Ordered by what the team would feel first. Sizes are rough: S under a day, M a f
 17. Confluence or Notion export of insights (spec "Later"). (M)
 
 **D. AI tier, only if the team asks (spec)**
-18. Auto-tagging new sources against the global taxonomy, with a review queue. (M–L)
+18. ~~Auto-tagging new sources against the global taxonomy, with a review queue.~~ Done in M14 (D59).
 19. Per-source summaries and per-highlight suggestions. (M)
 20. Ask-the-repository with citations to highlight and timestamp, built on the existing full-text search as the retriever. (L)
 21. Thematic clustering across highlights. (L)

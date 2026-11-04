@@ -38,6 +38,17 @@ Pass `-T` and `</dev/null` to every `compose run` inside a script: without them 
 
 Hetzner CPX32, Helsinki, Ubuntu 26.04, Docker and Caddy from Ubuntu's repositories, `ufw` allowing 22/80/443, `fail2ban`, backup cron at 02:30 to `/srv/research/backups` (local only until an off-site target exists). Repository at `/srv/research`, env in `/srv/research/.env.prod`. Release: `git pull`, `build`, `run -T --rm migrate </dev/null`, `up -d`.
 
+## AI suggestions
+
+Off until a key is configured. To turn them on, add to `/srv/research/.env.prod` and run the release script:
+
+```
+ANTHROPIC_API_KEY=sk-ant-...
+# optional: AI_MODEL=claude-opus-5-5, AI_AUTO_SUGGEST=off, AI_SUGGESTIONS=off
+```
+
+When on, transcript text and the tag list are sent to Anthropic whenever suggestions run (on request, and once automatically for each new in-app transcription). Do not set `AI_PROVIDER=fake` on a server. See D59–D61.
+
 ## Backups
 
 `scripts/backup.sh` runs the `backup` service: `pg_dump -Fc` of the database and a tarball of the uploads, both into `BACKUP_DIR`, keeping 14 days. Schedule it with cron at 02:30. Restore: `pg_restore -d research db-YYYY-MM-DD.dump` and untar the uploads into the volume.

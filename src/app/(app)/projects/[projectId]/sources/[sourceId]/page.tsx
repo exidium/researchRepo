@@ -6,6 +6,9 @@ import { SourceActions } from "@/components/sources/SourceActions";
 import { UploadPanel } from "@/components/sources/UploadPanel";
 import { TranscriptionPanel } from "@/components/sources/TranscriptionPanel";
 import { transcriptionState } from "@/server/transcription";
+import { SuggestionPanel } from "@/components/sources/SuggestionPanel";
+import { aiEnabled, maybeAutoSuggest, suggestionState } from "@/server/suggestions";
+import { aiProvider } from "@/server/ai/model";
 import { MediaPlayer } from "@/components/transcript/MediaPlayer";
 import { TranscriptEditor } from "@/components/transcript/TranscriptEditor";
 import { listTagsForPicker } from "@/server/queries/tags";
@@ -24,6 +27,9 @@ export default async function SourcePage({ params }: PageProps<"/projects/[proje
   const participants = source.participants.map((sp) => sp.participant);
   const hasRecording = !!source.recordingPath;
   const job = await transcriptionState(source.id);
+  const ai = canEdit && aiEnabled();
+  if (ai) await maybeAutoSuggest(source.id);
+  const suggest = ai ? await suggestionState(source.id) : null;
 
   return (
     <>
@@ -57,6 +63,7 @@ export default async function SourcePage({ params }: PageProps<"/projects/[proje
             <div className="mt-2">
               <TranscriptionPanel sourceId={source.id} job={job} hasRecording={hasRecording} hasTranscript={source.segments.length > 0} highlightCount={source._count.highlights} canEdit={canEdit} />
             </div>
+            {suggest && source.segments.length ? <div className="mt-2"><SuggestionPanel sourceId={source.id} job={suggest.job} pending={suggest.suggestions.length} provider={aiProvider() ?? "fake"} /></div> : null}
           </div>
         </div>
         {source.segments.length ? (
@@ -68,6 +75,8 @@ export default async function SourcePage({ params }: PageProps<"/projects/[proje
             participants={participants.map((p) => ({ id: p.id, name: p.name }))}
             canEdit={canEdit}
             hasRecording={hasRecording}
+            suggestions={suggest?.suggestions ?? []}
+            aiEnabled={ai}
           />
         ) : (
           <p className="text-sm text-muted-foreground">{job && (job.status === "QUEUED" || job.status === "RUNNING") ? "The transcript will appear here when transcription finishes." : canEdit ? "Upload a recording to transcribe it, or upload an existing transcript." : "No transcript yet."}</p>

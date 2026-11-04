@@ -74,8 +74,13 @@ export function TagsManager({ groups, tags, canManage }: { groups: Group[]; tags
                 {canManage ? (
                   <input type="color" aria-label={`Colour of ${t.name}`} value={t.color ?? tagColor(t)} className="size-4 shrink-0 cursor-pointer rounded-full border-0 bg-transparent p-0" onChange={(e) => run(() => updateTag({ id: t.id, color: e.target.value }))} />
                 ) : <span className="size-2.5 shrink-0 rounded-full" style={{ background: tagColor(t) }} />}
-                <InlineName value={t.name} canEdit={canManage && !t.archivedAt} onSave={(name) => run(() => updateTag({ id: t.id, name }), "Tag renamed")} />
-                {t.archivedAt ? <Badge variant="outline">archived</Badge> : null}
+                <div className="flex min-w-0 flex-col">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <InlineName value={t.name} canEdit={canManage && !t.archivedAt} onSave={(name) => run(() => updateTag({ id: t.id, name }), "Tag renamed")} />
+                    {t.archivedAt ? <Badge variant="outline">archived</Badge> : null}
+                  </span>
+                  <Description value={t.description} tagName={t.name} canEdit={canManage && !t.archivedAt} onSave={(description) => run(() => updateTag({ id: t.id, description }), "Description saved")} />
+                </div>
               </div>
               <span className="hidden text-right text-xs tabular-nums text-muted-foreground sm:block">{t._count.highlights} highlights</span>
               {canManage ? (
@@ -158,6 +163,27 @@ function InlineName({ value, canEdit, onSave, className }: { value: string; canE
       <Button type="button" size="icon-xs" variant="ghost" aria-label="Cancel rename" onClick={() => setEditing(false)}><X className="size-3.5" /></Button>
     </form>
   );
+}
+
+/** What the tag means, in one line. Researchers read it when tagging; AI suggestions rely on it. */
+function Description({ value, tagName, canEdit, onSave }: { value: string | null; tagName: string; canEdit: boolean; onSave: (v: string | null) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value ?? "");
+  if (editing) {
+    return (
+      <form className="mt-0.5 flex items-center gap-1" onSubmit={(e) => { e.preventDefault(); const v = draft.trim() || null; if (v !== value) onSave(v); setEditing(false); }}>
+        <Input autoFocus value={draft} maxLength={500} onChange={(e) => setDraft(e.target.value)} placeholder="When to use this tag, in one line" aria-label={`Description of ${tagName}`} className="h-7 w-full max-w-md text-xs" onKeyDown={(e) => { if (e.key === "Escape") setEditing(false); }} />
+        <Button type="submit" size="icon-xs" variant="ghost" aria-label="Save description"><Check className="size-3.5" /></Button>
+        <Button type="button" size="icon-xs" variant="ghost" aria-label="Cancel description" onClick={() => setEditing(false)}><X className="size-3.5" /></Button>
+      </form>
+    );
+  }
+  if (value) {
+    return canEdit
+      ? <button type="button" className="truncate text-left text-xs text-muted-foreground hover:text-foreground" title="Edit description" onClick={() => { setDraft(value); setEditing(true); }}>{value}</button>
+      : <span className="truncate text-xs text-muted-foreground">{value}</span>;
+  }
+  return canEdit ? <button type="button" className="w-fit text-left text-xs text-muted-foreground/70 hover:text-foreground" onClick={() => { setDraft(""); setEditing(true); }}>Add description</button> : null;
 }
 
 function MergeForm({ source, candidates, onDone, run }: { source: Tag; candidates: Tag[]; onDone: () => void; run: (fn: () => Promise<Res>, ok?: string) => void }) {

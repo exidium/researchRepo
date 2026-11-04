@@ -7,6 +7,7 @@ import type { Node as PMNode } from "@tiptap/pm/model";
 import { SegmentNode } from "@/lib/transcript/schema";
 import { formatClock } from "@/lib/transcript/time";
 import { segmentIdsOf } from "@/lib/transcript/doc";
+import { locateQuote } from "@/lib/ai/quote";
 
 export type SegmentViewOptions = {
   onSpeakerClick?: (segmentId: string, anchor: HTMLElement, editor: Editor) => void;
@@ -134,6 +135,58 @@ export const FindHighlight = Extension.create({
             const s = findKey.getState(state);
             if (!s?.matches.length) return null;
             return DecorationSet.create(state.doc, s.matches.map((m, i) => Decoration.inline(m.from, m.to, { class: i === s.current ? "find-match find-current" : "find-match" })));
+          },
+        },
+      }),
+    ];
+  },
+});
+
+// ---------- AI suggestions (proposed highlights awaiting review) ----------
+
+export type SuggestionMark = { id: string; segmentId: string; startOffset: number; quote: string };
+type SuggestState = { items: SuggestionMark[]; selected: string | null; ranges: { id: string; from: number; to: number }[] };
+export const suggestKey = new PluginKey<SuggestState>("suggestions");
+
+/** Absolute ranges of each suggestion, found by quote in its segment so edits never misplace them. */
+export function suggestionRanges(doc: PMNode, items: SuggestionMark[]) {
+  const pos = new Map<string, { node: PMNode; pos: number }>();
+  doc.forEach((node, offset) => pos.set(node.attrs.segmentId, { node, pos: offset }));
+  const out: { id: string; from: number; to: number }[] = [];
+  for (const s of items) {
+    const seg = pos.get(s.segmentId);
+    if (!seg) continue;
+    const span = locateQuote(seg.node.textContent, s.quote, s.startOffset);
+    if (span) out.push({ id: s.id, from: seg.pos + 1 + span.start, to: seg.pos + 1 + span.end });
+  }
+  return out;
+}
+
+/** Paints proposed highlights with a dashed underline; set items/selected via a `suggestKey` meta. */
+export const SuggestionMarks = Extension.create({
+  name: "suggestionMarks",
+  addProseMirrorPlugins() {
+    return [
+      new Plugin<SuggestState>({
+        key: suggestKey,
+        state: {
+          init: () => ({ items: [], selected: null, ranges: [] }),
+          apply(tr, prev, _old, state) {
+            const meta = tr.getMeta(suggestKey) as Partial<Omit<SuggestState, "ranges">> | undefined;
+            if (!meta && !tr.docChanged) return prev;
+            const items = meta?.items ?? prev.items;
+            const selected = meta && "selected" in meta ? meta.selected ?? null : prev.selected;
+            return { items, selected, ranges: meta?.items || tr.docChanged ? suggestionRanges(state.doc, items) : prev.ranges };
+          },
+        },
+        props: {
+          decorations(state) {
+            const s = suggestKey.getState(state);
+            if (!s?.ranges.length) return null;
+            return DecorationSet.create(state.doc, s.ranges.map((r) => Decoration.inline(r.from, r.to, {
+              class: r.id === s.selected ? "suggestion suggestion-selected" : "suggestion",
+              "data-suggestion-id": r.id,
+            })));
           },
         },
       }),

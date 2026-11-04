@@ -117,3 +117,12 @@ What each milestone delivered and how it was verified. Decisions live in `decisi
 - Inline note editor on each highlight in `HighlightPanel.tsx`, using the existing `setHighlightNote` action.
 - `tagProjectCounts` and `tagMatrix` in `src/server/queries/tags.ts`; "Tags in this project" on the project page; "By project" tab on `/tags` with a shaded tags × projects table.
 - Verified: 50 unit tests, 15 Playwright tests including `tests/e2e/editor-tools.spec.ts` (reversible replace-all with anchor checks, note persistence, count links landing on matching search results).
+
+## M14 · AI suggestions for highlights and tags (2026-11-04)
+
+- Schema (migration `ai_suggestions`, checked before applying): `SuggestionJob`, `HighlightSuggestion`, `TagSuggestion`, `Highlight.aiAssisted`.
+- `src/lib/ai/quote.ts`: finds a quote in a line, shared by server and editor (4 unit tests).
+- `src/server/ai/model.ts`: Claude (structured output, prompt-cached taxonomy, refusal fallback) and an offline fake. `src/server/suggestions.ts`: taxonomy with privacy-safe examples, runs, anchoring and filtering, automatic first run, tag suggestions. `src/server/actions/suggestions.ts`: request, accept, dismiss, dismiss all, tag accept and dismiss; all through `projectAction` as EDITOR.
+- Editor: dashed underline on proposed passages, "Suggested highlights" review list with keep/drop tag chips, Accept and Dismiss; suggested tag chips and a "Suggest tags" button on each highlight; "AI-suggested, reviewed by" on accepted ones. Source page: "AI suggestions" panel that polls while a run is going.
+- Tags page: inline descriptions. Seed: descriptions for all synthetic tags.
+- Verified: 59 unit tests (including `tests/unit/suggestions.db.test.ts`, which runs the pipeline on the database with a scripted model: verbatim anchoring, hallucinated and out-of-range quotes dropped, unknown tag keys dropped, overlap with existing highlights skipped, rejected proposals not repeated, failures recorded, examples only from open projects) and 18 Playwright tests including `tests/e2e/ai-suggestions.spec.ts` (propose, accept with anchor check, dismiss, suggest and accept a tag, edit a description), all with the fake provider. Not verified: a real Claude call, because no API key is configured here.
