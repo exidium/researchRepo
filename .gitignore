@@ -20,3 +20,6 @@ next-env.d.ts
 # static demo (GitHub Pages)
 /demo/node_modules/
 /demo/dist/
+
+# Python worker
+/worker/__pycache__/

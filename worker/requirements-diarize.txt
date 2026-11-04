@@ -1,0 +1,2 @@
+# Optional speaker diarization (build with --build-arg DIARIZATION=1, needs HF_TOKEN at runtime).
+pyannote.audio==3.3.2

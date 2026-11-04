@@ -28,6 +28,7 @@ services:
     environment:
       DATABASE_URL: postgresql://research:${POSTGRES_PASSWORD}@db:5432/research?schema=public
       UPLOAD_DIR: /data/uploads
+      WHISPER_MODEL: ${WHISPER_MODEL:-medium}
       MAX_TRANSCRIPT_BYTES: ${MAX_TRANSCRIPT_BYTES:-20000000}
       MAX_RECORDING_BYTES: ${MAX_RECORDING_BYTES:-2000000000}
       AUTH_DISABLED: "false"
@@ -35,6 +36,30 @@ services:
       - uploads:/data/uploads   # mount a Hetzner volume here for large recordings
     ports:
       - "127.0.0.1:3000:3000"  # Caddy on the host terminates HTTPS and proxies here
+
+  # Transcription worker: claims jobs from Postgres, transcribes recordings on CPU (faster-whisper).
+  # Diarization (speaker labels) is optional: build with DIARIZATION=1 and set HF_TOKEN (decision D55).
+  worker:
+    build:
+      context: ./worker
+      args:
+        DIARIZATION: ${DIARIZATION:-0}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://research:${POSTGRES_PASSWORD}@db:5432/research
+      UPLOAD_DIR: /data/uploads
+      WHISPER_MODEL: ${WHISPER_MODEL:-medium}
+      WHISPER_THREADS: ${WHISPER_THREADS:-3}
+      DIARIZE: ${DIARIZE:-0}
+      HF_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - uploads:/data/uploads:ro
+      - whisper-models:/models
+    # Leave one core for the app and Postgres while a transcript runs.
+    cpus: ${WORKER_CPUS:-3}
 
   # One-off: apply migrations (and optionally seed). Same image stage with the Prisma CLI.
   migrate:
@@ -66,3 +91,4 @@ services:
 volumes:
   pgdata:
   uploads:
+  whisper-models:

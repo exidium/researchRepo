@@ -4,6 +4,8 @@ import { PageHeader } from "@/components/shell/PageHeader";
 import { Badge } from "@/components/ui/badge";
 import { SourceActions } from "@/components/sources/SourceActions";
 import { UploadPanel } from "@/components/sources/UploadPanel";
+import { TranscriptionPanel } from "@/components/sources/TranscriptionPanel";
+import { transcriptionState } from "@/server/transcription";
 import { MediaPlayer } from "@/components/transcript/MediaPlayer";
 import { TranscriptEditor } from "@/components/transcript/TranscriptEditor";
 import { listTagsForPicker } from "@/server/queries/tags";
@@ -21,6 +23,7 @@ export default async function SourcePage({ params }: PageProps<"/projects/[proje
   const canEdit = roleAtLeast(role, "EDITOR");
   const participants = source.participants.map((sp) => sp.participant);
   const hasRecording = !!source.recordingPath;
+  const job = await transcriptionState(source.id);
 
   return (
     <>
@@ -51,6 +54,9 @@ export default async function SourcePage({ params }: PageProps<"/projects/[proje
               status={source.status}
               errorMessage={source.errorMessage}
             />
+            <div className="mt-2">
+              <TranscriptionPanel sourceId={source.id} job={job} hasRecording={hasRecording} hasTranscript={source.segments.length > 0} highlightCount={source._count.highlights} canEdit={canEdit} />
+            </div>
           </div>
         </div>
         {source.segments.length ? (
@@ -64,7 +70,7 @@ export default async function SourcePage({ params }: PageProps<"/projects/[proje
             hasRecording={hasRecording}
           />
         ) : (
-          <p className="text-sm text-muted-foreground">{canEdit ? "Upload a transcript to get started." : "No transcript yet."}</p>
+          <p className="text-sm text-muted-foreground">{job && (job.status === "QUEUED" || job.status === "RUNNING") ? "The transcript will appear here when transcription finishes." : canEdit ? "Upload a recording to transcribe it, or upload an existing transcript." : "No transcript yet."}</p>
         )}
       </div>
     </>

@@ -28,12 +28,13 @@ model User {
   isAdmin      Boolean  @default(false) // manages users, tags and deletions
   createdAt    DateTime @default(now())
 
-  sessions      Session[]
-  memberships   ProjectMember[]
-  ownedProjects Project[]       @relation("ProjectOwner")
-  highlights    Highlight[]     @relation("HighlightCreatedBy")
-  savedViews    SavedView[]
-  themes        Theme[]
+  sessions          Session[]
+  memberships       ProjectMember[]
+  ownedProjects     Project[]          @relation("ProjectOwner")
+  highlights        Highlight[]        @relation("HighlightCreatedBy")
+  savedViews        SavedView[]
+  themes            Theme[]
+  transcriptionJobs TranscriptionJob[]
 }
 
 model Session {
@@ -64,9 +65,9 @@ model Project {
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 
-  owner    User            @relation("ProjectOwner", fields: [ownerId], references: [id])
-  members  ProjectMember[]
-  sources  Source[]
+  owner   User            @relation("ProjectOwner", fields: [ownerId], references: [id])
+  members ProjectMember[]
+  sources Source[]
 
   @@index([productArea])
   @@index([startDate])
@@ -134,13 +135,15 @@ model Source {
   durationMs     Int?
   externalId     String?      @unique // Dovetail note id
   errorMessage   String?
+  language       String? // ISO 639-1 code detected by transcription, e.g. "en"
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
 
-  project      Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  participants SourceParticipant[]
-  segments     Segment[]
-  highlights   Highlight[]
+  project           Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  participants      SourceParticipant[]
+  segments          Segment[]
+  highlights        Highlight[]
+  transcriptionJobs TranscriptionJob[]
 
   @@index([projectId, date])
 }
@@ -158,7 +161,7 @@ model SourceParticipant {
 }
 
 model Segment {
-  id            String  @id @default(cuid())
+  id            String                   @id @default(cuid())
   sourceId      String
   order         Int
   speaker       String?
@@ -166,7 +169,7 @@ model Segment {
   startMs       Int?
   endMs         Int?
   text          String
-  version       Int     @default(1) // optimistic lock for per-segment saves
+  version       Int                      @default(1) // optimistic lock for per-segment saves
   /// GENERATED ALWAYS AS ... STORED (search_vectors migration). The dbgenerated default mirrors the
   /// stored expression so `prisma migrate diff` sees no drift (decision D48).
   search        Unsupported("tsvector")? @default(dbgenerated("to_tsvector('english'::regconfig, COALESCE(text, ''::text))"))
@@ -191,19 +194,19 @@ enum HighlightStatus {
 }
 
 model Highlight {
-  id             String          @id @default(cuid())
+  id             String                   @id @default(cuid())
   sourceId       String
   startSegmentId String
   startOffset    Int
   endSegmentId   String
   endOffset      Int
   text           String
-  status         HighlightStatus @default(ACTIVE)
+  status         HighlightStatus          @default(ACTIVE)
   note           String?
   createdById    String?
-  externalId     String?         @unique // Dovetail highlight id
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
+  externalId     String?                  @unique // Dovetail highlight id
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
   /// GENERATED ALWAYS AS ... STORED (search_vectors migration); see decision D48.
   search         Unsupported("tsvector")? @default(dbgenerated("to_tsvector('english'::regconfig, ((COALESCE(text, ''::text) || ' '::text) || COALESCE(note, ''::text)))"))
 
@@ -313,4 +316,35 @@ model ThemeHighlight {
 
   @@id([themeId, highlightId])
   @@index([highlightId])
+}
+
+// ---------- transcription (Postgres is the queue; the worker container claims jobs with SKIP LOCKED) ----------
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  DONE
+  FAILED
+}
+
+model TranscriptionJob {
+  id            String    @id @default(cuid())
+  sourceId      String
+  status        JobStatus @default(QUEUED)
+  model         String // whisper model name, e.g. "medium"
+  language      String? // forced language; null = auto-detect
+  progress      Float     @default(0) // 0..1, from audio position
+  error         String?
+  segmentCount  Int?
+  audioMs       Int?
+  requestedById String?
+  createdAt     DateTime  @default(now())
+  startedAt     DateTime?
+  finishedAt    DateTime?
+
+  source      Source @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  requestedBy User?  @relation(fields: [requestedById], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([sourceId, createdAt])
 }

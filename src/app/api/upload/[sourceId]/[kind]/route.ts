@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { db } from "@/lib/db";
 import { guardSource } from "@/server/api-auth";
 import { replaceSegments } from "@/server/transcript/replace-segments";
+import { enqueueTranscription } from "@/server/transcription";
 import { MAX_RECORDING_BYTES, MAX_TRANSCRIPT_BYTES, TooLargeError, removeStored, resolveStored, writeSourceFile } from "@/lib/storage";
 import { parseTranscriptFile, RECORDING_EXTENSIONS, RECORDING_MIME, TRANSCRIPT_EXTENSIONS } from "@/lib/transcript/parse-file";
 
@@ -42,7 +43,14 @@ export async function PUT(request: Request, ctx: RouteContext<"/api/upload/[sour
   if (kind === "recording") {
     if (source.recordingPath && source.recordingPath !== stored.rel) await removeStored(source.recordingPath);
     await db.source.update({ where: { id: sourceId }, data: { recordingPath: stored.rel, recordingName: filename, recordingMime: RECORDING_MIME[ext] ?? request.headers.get("content-type"), recordingBytes: BigInt(stored.bytes), durationMs: null } });
-    return Response.json({ ok: true, kind, bytes: stored.bytes });
+    // A recording on a source without a transcript is transcribed automatically (decision D54).
+    const segments = await db.segment.count({ where: { sourceId } });
+    let transcription: string | null = null;
+    if (segments === 0 && source._count.highlights === 0) {
+      await enqueueTranscription(sourceId, guard.user.id);
+      transcription = "queued";
+    }
+    return Response.json({ ok: true, kind, bytes: stored.bytes, transcription });
   }
 
   // transcript: parse and replace segments

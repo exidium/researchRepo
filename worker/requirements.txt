@@ -1,0 +1,6 @@
+faster-whisper==1.1.1
+# faster-whisper 1.1.1 imports requests without declaring it
+requests==2.32.3
+# PyAV 14+ removed the metadata_errors argument faster-whisper 1.1.1 passes
+av==13.1.0
+psycopg[binary]==3.2.13

@@ -18,3 +18,5 @@ export const UpdateSourceSchema = z.object({
 export const DeleteSourceSchema = z.object({ id: idSchema });
 
 export const SetSourceDurationSchema = z.object({ id: idSchema, durationMs: z.number().int().positive().max(24 * 3600 * 1000) });
+
+export const RequestTranscriptionSchema = z.object({ sourceId: idSchema, language: z.string().regex(/^[a-z]{2}$/).nullable().optional() });

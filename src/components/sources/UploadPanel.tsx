@@ -35,10 +35,10 @@ export function UploadPanel({ sourceId, transcriptName, recordingName, highlight
     xhr.upload.onprogress = (e) => { if (e.lengthComputable) setProgress((p) => ({ ...p, [kind]: Math.round((e.loaded / e.total) * 100) })); };
     xhr.onload = () => {
       setProgress((p) => ({ ...p, [kind]: undefined }));
-      let body: { error?: string; segments?: number; warnings?: string[] } = {};
+      let body: { error?: string; segments?: number; warnings?: string[]; transcription?: string | null } = {};
       try { body = JSON.parse(xhr.responseText); } catch {}
       if (xhr.status >= 200 && xhr.status < 300) {
-        toast.success(kind === "transcript" ? `Transcript parsed: ${body.segments} segments` : "Recording uploaded");
+        toast.success(kind === "transcript" ? `Transcript parsed: ${body.segments} segments` : body.transcription === "queued" ? "Recording uploaded; transcription started" : "Recording uploaded");
         for (const w of body.warnings ?? []) toast.warning(w);
         router.refresh();
       } else {

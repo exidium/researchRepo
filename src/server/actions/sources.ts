@@ -4,7 +4,8 @@ import { revalidatePath } from "next/cache";
 import { db } from "@/lib/db";
 import { AuthzError, projectIdOfSource, roleAtLeast } from "@/lib/authz";
 import { projectAction } from "@/server/action";
-import { CreateSourceSchema, DeleteSourceSchema, SetSourceDurationSchema, UpdateSourceSchema } from "@/lib/validation/source";
+import { CreateSourceSchema, DeleteSourceSchema, RequestTranscriptionSchema, SetSourceDurationSchema, UpdateSourceSchema } from "@/lib/validation/source";
+import { enqueueTranscription } from "@/server/transcription";
 import { removeSourceDir } from "@/lib/storage";
 
 const refresh = () => revalidatePath("/", "layout");
@@ -54,4 +55,10 @@ export const deleteSource = projectAction(DeleteSourceSchema, "EDITOR", (i) => p
 export const setSourceDuration = projectAction(SetSourceDurationSchema, "VIEWER", (i) => projectIdOfSource(i.id), async ({ id, durationMs }) => {
   await db.source.updateMany({ where: { id, durationMs: null }, data: { durationMs } });
   return { id };
+});
+
+export const requestTranscription = projectAction(RequestTranscriptionSchema, "EDITOR", (i) => projectIdOfSource(i.sourceId), async ({ sourceId, language }, { user }) => {
+  const job = await enqueueTranscription(sourceId, user.id, { language });
+  refresh();
+  return job;
 });
