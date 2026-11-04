@@ -26,11 +26,21 @@ class SpeakerAt(unittest.TestCase):
 
 
 class SplitBySpeaker(unittest.TestCase):
-    def test_splits_a_whisper_segment_at_the_speaker_change(self):
+    def test_splits_a_whisper_segment_into_sentences_with_their_own_speaker(self):
         s = seg(2000, 5000, [(2000, 2600, "any"), (2600, 2900, "questions?"), (3600, 4200, "Yes,"), (4200, 4900, "one.")])
         cues = worker.split_by_speaker([s], TURNS)
         self.assertEqual([(c["speaker"], c["text"]) for c in cues], [("Speaker 1", "any questions?"), ("Speaker 2", "Yes, one.")])
         self.assertEqual((cues[1]["start"], cues[1]["end"]), (3600, 4900))
+
+    def test_a_flickering_word_does_not_split_a_sentence(self):
+        # One word of the sentence falls into the other speaker's turn; the sentence stays whole with the majority speaker.
+        s = seg(7000, 9700, [(7000, 7800, "Component"), (7800, 8600, "selection"), (8600, 9000, "takes"), (9400, 9700, "days.")])
+        cues = worker.split_by_speaker([s], TURNS)
+        self.assertEqual([(c["speaker"], c["text"]) for c in cues], [("Speaker 2", "Component selection takes days.")])
+
+    def test_long_pause_breaks_a_sentence(self):
+        s = seg(0, 6000, [(0, 500, "Well"), (4000, 4500, "anyway.")])
+        self.assertEqual(len(worker.split_by_speaker([s], TURNS)), 2)
 
     def test_without_turns_keeps_segments_and_no_speaker(self):
         cues = worker.split_by_speaker([seg(0, 1000, [(0, 500, "Hello"), (500, 1000, "there.")])], [])

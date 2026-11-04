@@ -81,6 +81,8 @@ _diarizer = None
 _extractor = None
 REFINE_MIN_S = 1.0      # lines shorter than this keep the first-pass speaker
 REFINE_MARGIN = 0.05    # cosine-similarity margin needed to move a line to another speaker
+MINOR_SPEAKER_S = 8.0   # a "speaker" with less speech than this AND under MINOR_SPEAKER_SHARE is a diarization artefact
+MINOR_SPEAKER_SHARE = 0.03
 
 
 def _models():
@@ -136,21 +138,45 @@ def diarize(path):
                 centroids.setdefault(label, []).append(voiceprint(a, b) * (b - a))
         centroids = {k: (lambda m: m / (np.linalg.norm(m) + 1e-9))(np.sum(v, axis=0)) for k, v in centroids.items()}
 
+        speech = {}
+        for a, b, label in turns:
+            speech[label] = speech.get(label, 0) + (b - a) / 1000
+        total = sum(speech.values()) or 1
+        minor = {k for k, sec in speech.items() if sec < MINOR_SPEAKER_S and sec < MINOR_SPEAKER_SHARE * total}
+        major = {k: v for k, v in centroids.items() if k not in minor}
+
         def refine(cues):
-            if len(centroids) < 2:
+            if not major:
                 return cues
-            moved = 0
+            moved = folded = 0
+            for i, c in enumerate(cues):
+                long_enough = c["end"] - c["start"] >= REFINE_MIN_S * 1000
+                if c["speaker"] in minor:
+                    # Artefact speaker: nearest real voice, or the neighbouring line's speaker if too short to measure.
+                    if c["end"] - c["start"] >= 500:
+                        e = voiceprint(c["start"], c["end"])
+                        c["speaker"] = max(major, key=lambda k: float(e @ major[k]))
+                    else:
+                        near = [x["speaker"] for x in cues[i - 1:i] + cues[i + 1:i + 2] if x["speaker"] in major]
+                        c["speaker"] = near[0] if near else next(iter(major))
+                    folded += 1
+                elif long_enough and len(major) >= 2 and c["speaker"] in major:
+                    e = voiceprint(c["start"], c["end"])
+                    sims = {k: float(e @ v) for k, v in major.items()}
+                    best = max(sims, key=sims.get)
+                    if best != c["speaker"] and sims[best] - sims[c["speaker"]] >= REFINE_MARGIN:
+                        c["speaker"] = best
+                        moved += 1
+            # Renumber by first appearance so names stay Speaker 1, 2, 3 after folding.
+            order = {}
             for c in cues:
-                if c["end"] - c["start"] < REFINE_MIN_S * 1000 or c["speaker"] not in centroids:
-                    continue
-                e = voiceprint(c["start"], c["end"])
-                sims = {k: float(e @ v) for k, v in centroids.items()}
-                best = max(sims, key=sims.get)
-                if best != c["speaker"] and sims[best] - sims[c["speaker"]] >= REFINE_MARGIN:
-                    c["speaker"] = best
-                    moved += 1
-            if moved:
-                log(f"speaker pass 2 moved {moved} line(s)")
+                if c["speaker"] and c["speaker"] not in order:
+                    order[c["speaker"]] = f"Speaker {len(order) + 1}"
+            for c in cues:
+                if c["speaker"]:
+                    c["speaker"] = order[c["speaker"]]
+            if moved or folded:
+                log(f"speaker pass 2: moved {moved} line(s), folded {folded} line(s) from {len(minor)} artefact speaker(s)")
             return cues
 
         return turns, refine
@@ -172,25 +198,50 @@ def speaker_at(start, end, turns):
     return best
 
 
-def split_by_speaker(segments, turns):
-    """Whisper segments (with words) → cues that never cross a speaker change."""
-    cues = []
+SENTENCE_END = re.compile(r"[.!?…][\"'”’)\]]?$")
+
+
+def sentences(segments, max_gap_ms=1000):
+    """Whisper segments (with words) → sentences: break after sentence punctuation or a pause over max_gap_ms."""
+    out, cur = [], None
     for seg in segments:
-        words = seg["words"] or [{"start": seg["start"], "end": seg["end"], "word": seg["text"]}]
-        cur = None
+        words = seg["words"] or [{"start": seg["start"], "end": seg["end"], "word": " " + seg["text"]}]
         for w in words:
-            spk = speaker_at(w["start"], w["end"], turns) if turns else None
-            if cur is None or spk != cur["speaker"]:
-                if cur and cur["text"].strip():
-                    cues.append(cur)
-                cur = {"start": w["start"], "end": w["end"], "text": "", "speaker": spk}
+            if cur and w["start"] - cur["end"] > max_gap_ms:
+                out.append(cur)
+                cur = None
+            if cur is None:
+                cur = {"start": w["start"], "end": w["end"], "text": "", "words": [], "speaker": None}
             cur["text"] += w["word"]
             cur["end"] = w["end"]
-        if cur and cur["text"].strip():
-            cues.append(cur)
-    for c in cues:
+            cur["words"].append(w)
+            if SENTENCE_END.search(w["word"].strip()):
+                out.append(cur)
+                cur = None
+    if cur:
+        out.append(cur)
+    for c in out:
         c["text"] = re.sub(r"\s+", " ", c["text"]).strip()
-    return [c for c in cues if c["text"]]
+    return [c for c in out if c["text"]]
+
+
+def assign_speakers(sents, turns):
+    """Pass-1 speaker for each sentence: the speaker with the most overlap across its words (one speaker per sentence)."""
+    for c in sents:
+        if not turns:
+            c["speaker"] = None
+            continue
+        weight = {}
+        for w in c["words"]:
+            spk = speaker_at(w["start"], w["end"], turns)
+            weight[spk] = weight.get(spk, 0) + max(w["end"] - w["start"], 1)
+        c["speaker"] = max(weight, key=weight.get)
+    return sents
+
+
+def split_by_speaker(segments, turns):
+    """Sentences, each with one speaker (kept as the name the rest of the pipeline and the tests use)."""
+    return assign_speakers(sentences(segments), turns)
 
 
 def claim(conn):
