@@ -98,3 +98,12 @@ What each milestone delivered and how it was verified. Decisions live in `decisi
 - Verified: local `vite preview` under the `/heyMarvinClone/` base path, exercised with Playwright: 140 highlights, tags pivot with 10 groups, theme view with 13 highlights, search narrowing to 18, context mark rendered, no console errors.
 - Follow-up (2026-10-18): the static site now covers the whole repository UI read-only: sidebar, projects list and detail, sources with the highlighted transcript and side panel (`?highlight=` and `?segment=` deep links), participants list and detail, tags by group, search with scope and filters. Hash routing (`#/projects/…`) so links work on Pages; old `?pivot=` explorer links redirect. Repository renamed to `exidium/researchRepo` (D51). Verified with a scripted browser walk of every page under the `/researchRepo/` base path: no console errors.
 - Follow-up (2026-10-18): the explorer is back inside the sidebar shell in the app and the static site; its header keeps the keyword search (D52). Root typecheck and lint now exclude `demo/`, which has its own toolchain.
+
+## M12 · Automatic transcription (2026-11-04)
+
+- `TranscriptionJob` table and `Source.language` (migration `transcription_jobs`, checked before applying).
+- `src/server/transcription.ts`: `enqueueTranscription` and `transcriptionState`; upload route queues a job for a recording on an empty source; `requestTranscription` action for editors.
+- `worker/`: Python container that claims jobs, transcribes with faster-whisper, coalesces cues, replaces segments in one transaction, writes progress, marks failures on the job and the source.
+- Source page: transcription panel with queued (and place in queue), running (progress bar), done (model, language, segment count) and failed states; polls every 4 s while active; button locked once highlights exist.
+- Verified locally with the `tiny` model on a synthetic 24-second two-voice M4A: upload queued the job automatically; a failure (PyAV incompatibility, since pinned) was recorded on job and source; clicking Re-transcribe in the browser queued a job, the worker finished it in 4 s, and the page showed five correctly timed lines without a reload. Two dependency bugs that would have crashed the container were found and pinned this way.
+- Not yet done: deployment to the server and the medium vs large-v3 speed test on its cores (needs Bruno's approval to deploy).
